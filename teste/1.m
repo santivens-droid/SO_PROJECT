@@ -1,7 +1,2 @@
 PASSO 1
-POS 1 2
-D
-D
-T 1
-A
-A
+POS 1 7

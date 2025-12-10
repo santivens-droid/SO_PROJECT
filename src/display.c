@@ -167,7 +167,8 @@ char get_input() {
         case 'A':
         case 'D':
         case 'Q':
-        case 'G': // <--- ADICIONE ISTO OBRIGATORIAMENTE
+        case 'G':
+        case 'C': // 
             return (char)ch;
         
         default:

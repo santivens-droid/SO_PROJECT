@@ -8,7 +8,7 @@ PAC 1.p
 MON 1.m
 #MAPA (X=Parede, o=Vazio, @=Portal)
 XXXXXXXXXX
-Xoo@oooooX
-XoXooooooX
 XooooooooX
+XooooooooX
+Xooooooo@X
 XXXXXXXXXX

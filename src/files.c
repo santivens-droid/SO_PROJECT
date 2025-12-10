@@ -6,6 +6,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#define _DEFAULT_SOURCE
+// ou em sistemas mais antigos: #define _BSD_SOURCE
+#include <dirent.h>
 
 // Função auxiliar para filtro do scandir (movida do game.c)
 int filter_levels(const struct dirent *entry) {
