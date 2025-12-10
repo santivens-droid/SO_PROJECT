@@ -1,7 +1,4 @@
-PASSO 0
-POS 3 8
-D
-S
-S
+PASSO 1
+POS 1 8
+G
 A
-W

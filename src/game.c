@@ -77,52 +77,70 @@ int play_board(board_t * game_board) {
         play = &pacman->moves[pacman->current_move % pacman->n_moves];
         action_char = play->command;
     }
-
     // -----------------------------------------------------------
     // 2. LÓGICA DE QUICKSAVE (Comando 'G')
     // -----------------------------------------------------------
     if (action_char == 'G') {
-        // Só posso gravar se não houver já um save ativo (eu sou o Pai)
+        
+        // Se eu sou o Pai (has_active_save == 0), posso gravar.
         if (has_active_save == 0) {
             
-            debug("Iniciando Quicksave (PID Pai: %d)...\n", getpid());
+            debug("Iniciando Quicksave via Teclado/Ficheiro (PID Pai: %d)...\n", getpid());
             
-            // Criação do Checkpoint
             pid_t pid = fork();
-
 
             if (pid < 0) {
                 perror("Erro no fork");
             }
-            // Dentro do bloco if (action_char == 'G') ...
-    if (pid > 0) {
-        // === PROCESSO PAI ===
-        debug("[PAI] Iniciei waitpid. PID do Filho: %d\n", pid); // <--- DEBUG
-        
-        int status;
-        waitpid(pid, &status, 0); 
+            else if (pid > 0) {
+                // === PROCESSO PAI (SAVE STATE) ===
+                int status;
+                waitpid(pid, &status, 0); 
 
-        if (WIFEXITED(status)) {
-            int exit_code = WEXITSTATUS(status);
-            debug("[PAI] Filho saiu. Exit Code: %d (Esperado 10 para restore)\n", exit_code); // <--- DEBUG
+                if (WIFEXITED(status)) {
+                    int exit_code = WEXITSTATUS(status);
 
-            if (exit_code == EXIT_RESTORE) {
-                debug("[PAI] RESTAURO DETETADO! Retomando jogo.\n"); // <--- DEBUG
-                // ... (código de restauro)
-                has_active_save = 0;
-                // ...
+                    if (exit_code == EXIT_RESTORE) {
+                        debug("Save carregado! Pai retoma.\n");
+                        has_active_save = 0; 
+                        
+                        // CORREÇÃO 1: Se o 'G' estava no ficheiro, temos de passar à frente
+                        // para que, ao retomar, o Pacman não tente gravar outra vez imediatamente.
+                        if (pacman->n_moves > 0 && play != NULL && play->command == 'G') {
+                            pacman->current_move++;
+                        }
+                        
+                        // Forçar refresh do ecrã
+                        clear();
+                        refresh();
+                        screen_refresh(game_board, DRAW_MENU); 
+                        return CONTINUE_PLAY;
+                    }
+                    else if (exit_code == EXIT_GAME_OVER) {
+                        return QUIT_GAME;
+                    }
+                }
+                // Se o filho morreu por outra razão
+                return CONTINUE_PLAY; 
+            }
+            else {
+                // === PROCESSO FILHO (JOGO ATIVO) ===
+                has_active_save = 1; 
+                
+                // CORREÇÃO 2: O Filho acabou de ser criado a partir de um comando 'G'.
+                // Ele TEM de avançar para a próxima instrução imediatamente, 
+                // senão fica preso no 'G' para sempre.
+                if (pacman->n_moves > 0 && play != NULL && play->command == 'G') {
+                     pacman->current_move++;
+                }
             }
         }
-        else if (WIFSIGNALED(status)) {
-             debug("[PAI] ALERTA: Filho crashou com sinal %d\n", WTERMSIG(status)); // <--- DEBUG
-        }
-    }
-            else {
-                has_active_save = 1; 
-        debug("[FILHO] Sou o processo ativo. PID: %d. has_active_save definido para 1.\n", getpid()); // <--- DEBUG
-                
-                // O filho também tem de avançar o movimento 'G' para não o repetir
-                if (pacman->n_moves > 0) pacman->current_move++;
+        else {
+            // CORREÇÃO 3: CRUCIAL PARA O FILHO
+            // Se eu já sou o Filho (has_active_save == 1) e encontro um 'G' no ficheiro,
+            // tenho de o ignorar e AVANÇAR. Se não fizer isto, fico preso aqui.
+            if (pacman->n_moves > 0 && play != NULL && play->command == 'G') {
+                 pacman->current_move++;
             }
         }
         

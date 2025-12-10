@@ -25,6 +25,7 @@ OBJS = game.o display.o board.o
 display.o = display.h board.h
 board.o = board.h
 
+
 # Object files path
 vpath %.o $(OBJ_DIR)
 vpath %.c $(SRC_DIR)
