@@ -5,11 +5,25 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <dirent.h> // Para scandir
+#include <dirent.h> 
+#include <sys/wait.h>  // Necessário para waitpid
+#include <sys/types.h> // Necessário para pid_t
+
+// Códigos de saída para comunicação Processo Filho -> Processo Pai
+#define EXIT_RESTORE 10   // Filho morreu, Pai deve restaurar
+#define EXIT_GAME_OVER 11 // Filho saiu (Q), Pai deve sair
+
+// Flag Global:
+// 0 = Sou o processo original (ou acabei de restaurar um save). Posso gravar.
+// 1 = Sou um processo filho (cópia descartável). Não posso gravar.
+int has_active_save = 0; 
+
+// ... (Resto das funções auxiliares como filter_levels mantêm-se)
 
 #define CONTINUE_PLAY 0
 #define NEXT_LEVEL 1
 #define QUIT_GAME 2
+#define EXIT_RESTORE 10
 
 // Função de filtro para scandir
 int filter_levels(const struct dirent *entry) {
@@ -30,62 +44,140 @@ void screen_refresh(board_t * game_board, int mode) {
 
 int play_board(board_t * game_board) {
     pacman_t* pacman = &game_board->pacmans[0];
-    command_t* play = NULL; // Inicializar a NULL por segurança
-    
-    // Variável estática ou local para o comando manual
-    command_t manual_command; 
+    command_t* play = NULL;
+    command_t manual_command;
+    char action_char = '\0'; // Para guardar qual é a ação deste turno
 
-    // 1. Ler Input (Agora é Non-Blocking graças ao display.c)
+    // -----------------------------------------------------------
+    // 1. PROCESSAR INPUT E DETERMINAR COMANDO
+    // -----------------------------------------------------------
     char input = get_input();
 
-    // 2. Verificar Saída Global
+    // Se o jogador carrega em 'Q'
     if (input == 'Q') {
+        if (has_active_save) {
+            // Se sou o filho, tenho de avisar o pai para morrer também
+            exit(EXIT_GAME_OVER); 
+        }
         return QUIT_GAME;
     }
-    
-    // 3. Lógica do Pacman
+
+    // Verificar se o movimento é Manual ou Automático
     if (pacman->n_moves == 0) { 
-        // --- Modo Manual ---
+        // Modo Manual
         if (input != '\0') {
-            // Se o jogador carregou numa tecla, preparamos o comando
             manual_command.command = input;
             manual_command.turns = 1;
             play = &manual_command;
-            
-            // Debug para ver o que carregaste
-            debug("KEY %c\n", play->command);
-            
-            // Executar movimento do Pacman
-            int result = move_pacman(game_board, 0, play);
-            if (result == REACHED_PORTAL) return NEXT_LEVEL;
-            if (result == DEAD_PACMAN) return QUIT_GAME;
+            action_char = input; 
         }
-        // SE NÃO CARREGOU EM NADA: O Pacman fica parado, 
-        // MAS o código continua para baixo para mexer os fantasmas!
     }
     else { 
-        // --- Modo Automático ---
+        // Modo Automático (Ler do ficheiro)
         play = &pacman->moves[pacman->current_move % pacman->n_moves];
-        
-        int result = move_pacman(game_board, 0, play);
-        if (result == REACHED_PORTAL) return NEXT_LEVEL;
-        if (result == DEAD_PACMAN) return QUIT_GAME;
+        action_char = play->command;
     }
 
-    // 4. Lógica dos Fantasmas (Corre SEMPRE, independentemente do input)
+    // -----------------------------------------------------------
+    // 2. LÓGICA DE QUICKSAVE (Comando 'G')
+    // -----------------------------------------------------------
+    if (action_char == 'G') {
+        // Só posso gravar se não houver já um save ativo (eu sou o Pai)
+        if (has_active_save == 0) {
+            
+            debug("Iniciando Quicksave (PID Pai: %d)...\n", getpid());
+            
+            // Criação do Checkpoint
+            pid_t pid = fork();
+
+
+            if (pid < 0) {
+                perror("Erro no fork");
+            }
+            // Dentro do bloco if (action_char == 'G') ...
+    if (pid > 0) {
+        // === PROCESSO PAI ===
+        debug("[PAI] Iniciei waitpid. PID do Filho: %d\n", pid); // <--- DEBUG
+        
+        int status;
+        waitpid(pid, &status, 0); 
+
+        if (WIFEXITED(status)) {
+            int exit_code = WEXITSTATUS(status);
+            debug("[PAI] Filho saiu. Exit Code: %d (Esperado 10 para restore)\n", exit_code); // <--- DEBUG
+
+            if (exit_code == EXIT_RESTORE) {
+                debug("[PAI] RESTAURO DETETADO! Retomando jogo.\n"); // <--- DEBUG
+                // ... (código de restauro)
+                has_active_save = 0;
+                // ...
+            }
+        }
+        else if (WIFSIGNALED(status)) {
+             debug("[PAI] ALERTA: Filho crashou com sinal %d\n", WTERMSIG(status)); // <--- DEBUG
+        }
+    }
+            else {
+                has_active_save = 1; 
+        debug("[FILHO] Sou o processo ativo. PID: %d. has_active_save definido para 1.\n", getpid()); // <--- DEBUG
+                
+                // O filho também tem de avançar o movimento 'G' para não o repetir
+                if (pacman->n_moves > 0) pacman->current_move++;
+            }
+        }
+        
+        // Se a ação foi 'G', anulamos 'play' para não ir para o switch de movimento
+        play = NULL; 
+    }
+
+    // -----------------------------------------------------------
+    // 3. MOVIMENTO DO PACMAN
+    // -----------------------------------------------------------
+    if (play != NULL && play->command != 'G') {
+        int result = move_pacman(game_board, 0, play);
+        
+        if (result == REACHED_PORTAL) return NEXT_LEVEL;
+
+       // Dentro de if (play != NULL ...)
+    if (result == DEAD_PACMAN) {
+        debug("[MORTE ATIVA] Pacman bateu num monstro. has_active_save=%d\n", has_active_save); // <--- DEBUG
+        
+        if (has_active_save) {
+            debug("[FILHO] A enviar EXIT_RESTORE (10)...\n"); // <--- DEBUG
+            exit(EXIT_RESTORE);
+        }
+        debug("[MORTE] Sem save ativo. QUIT_GAME.\n"); // <--- DEBUG
+        return QUIT_GAME; 
+    }
+    }
+
+    // -----------------------------------------------------------
+    // 4. MOVIMENTO DOS FANTASMAS
+    // -----------------------------------------------------------
     for (int i = 0; i < game_board->n_ghosts; i++) {
         ghost_t* ghost = &game_board->ghosts[i];
-        
-        // Verifica se o monstro tem movimentos definidos
+        // Move fantasma se tiver movimentos definidos
         if (ghost->n_moves > 0) {
              move_ghost(game_board, i, &ghost->moves[ghost->current_move % ghost->n_moves]);
         }
     }
 
-    // 5. Verificação Final de Vida
+    // -----------------------------------------------------------
+    // 5. VERIFICAÇÃO FINAL DE VIDA
+    // -----------------------------------------------------------
+    // (Caso o fantasma tenha atropelado o Pacman no turno dele)
+    // No final da função play_board
     if (!game_board->pacmans[0].alive) {
+        debug("[MORTE PASSIVA] Fantasma matou Pacman. has_active_save=%d\n", has_active_save); // <--- DEBUG
+        
+        if (has_active_save) {
+            debug("[FILHO] A enviar EXIT_RESTORE (10)...\n"); // <--- DEBUG
+            sleep_ms(100); // Dar tempo para escrever no log
+            exit(EXIT_RESTORE); 
+        }
+        debug("[MORTE] Sem save ativo. QUIT_GAME.\n"); // <--- DEBUG
         return QUIT_GAME;
-    }      
+    }   
 
     return CONTINUE_PLAY;  
 }
@@ -163,4 +255,3 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-//nigga

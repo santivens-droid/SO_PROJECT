@@ -149,6 +149,7 @@ void refresh_screen() {
     refresh();
 }
 
+
 char get_input() {
     // Get a character from the keyboard
     int ch = getch();
@@ -166,7 +167,7 @@ char get_input() {
         case 'A':
         case 'D':
         case 'Q':
-
+        case 'G': // <--- ADICIONE ISTO OBRIGATORIAMENTE
             return (char)ch;
         
         default:
