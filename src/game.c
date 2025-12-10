@@ -9,6 +9,7 @@
 #include <sys/wait.h>  // Necessário para waitpid
 #include <sys/types.h> // Necessário para pid_t
 #include "files.h"
+#define _DEFAULT_SOURCE
 
 // Códigos de saída para comunicação Processo Filho -> Processo Pai
 #define EXIT_RESTORE 10   // Filho morreu, Pai deve restaurar
