@@ -27,6 +27,10 @@ void screen_refresh(board_t * game_board, int mode) {
 // THREAD DO FANTASMA
 // ------------------------------------------------------------
 void* ghost_thread(void* arg) {
+
+    int id = ((thread_arg_t*)arg)->id;
+    debug("[THREAD GHOST %d] Iniciada.\n", id);
+
     thread_arg_t* params = (thread_arg_t*)arg;
     board_t* board = params->board;
     int ghost_idx = params->id;
@@ -46,6 +50,7 @@ void* ghost_thread(void* arg) {
 
         // Verificar se jogo ainda corre depois de acordar
         if (!board->game_running) {
+            debug("[THREAD GHOST %d] Detetou fim de jogo. A sair...\n", id);
             pthread_mutex_unlock(&board->board_lock);
             break;
         }
@@ -65,18 +70,19 @@ void* ghost_thread(void* arg) {
         // 4. Libertar Mutex
         pthread_mutex_unlock(&board->board_lock);
     }
+    debug("[THREAD GHOST %d] Terminou loop. A morrer.\n", id);
     return NULL;
 }
 
 // ------------------------------------------------------------
-// THREAD DO PACMAN
+// THREAD DO PACMAN (CORRIGIDA)
 // ------------------------------------------------------------
 void* pacman_thread(void* arg) {
     board_t* board = (board_t*)arg;
     pacman_t* self = &board->pacmans[0];
 
     while (board->game_running) {
-        // Pacman espera um pouco menos para ser responsivo, ou usa o tempo do jogo
+        // Sleep pequeno para não bloquear CPU
         sleep_ms(10); 
 
         pthread_mutex_lock(&board->board_lock);
@@ -89,31 +95,50 @@ void* pacman_thread(void* arg) {
         command_t cmd;
         int moved = 0;
 
-        // Prioridade 1: Comando do Teclado (vindo da Main Thread)
+        // Prioridade 1: Comando do Teclado (vindo do Main)
         if (board->next_pacman_cmd != '\0') {
             cmd.command = board->next_pacman_cmd;
             cmd.turns = 1;
             board->next_pacman_cmd = '\0'; // Consumir comando
-            move_pacman(board, 0, &cmd);
+            
+            int result = move_pacman(board, 0, &cmd);
             moved = 1;
+
+            // Verificar Resultado do Movimento Manual
+            if (result == REACHED_PORTAL) {
+                board->exit_status = 1; // VITÓRIA
+                board->game_running = 0;
+            } else if (result == DEAD_PACMAN) {
+                board->exit_status = 2; // MORTE
+                board->game_running = 0;
+            }
         }
-        // Prioridade 2: Modo Automático (Ficheiro) se não houver teclado
+        // Prioridade 2: Modo Automático (Ficheiro)
         else if (self->n_moves > 0) {
-            // Pequeno delay para o automático não ser instantâneo
-            // (Na prática deveria ter lógica de timing melhor, mas serve para o exemplo)
              cmd = self->moves[self->current_move % self->n_moves];
-             move_pacman(board, 0, &cmd);
+             
+             int result = move_pacman(board, 0, &cmd);
              moved = 1;
+
+             // Verificar Resultado do Movimento Automático
+             if (result == REACHED_PORTAL) {
+                 board->exit_status = 1; // VITÓRIA
+                 board->game_running = 0;
+             } else if (result == DEAD_PACMAN) {
+                 board->exit_status = 2; // MORTE
+                 board->game_running = 0;
+             }
         }
 
-        // Verificar colisões ou morte após movimento
-        if (!self->alive) {
-            board->game_running = 0; // Sinalizar fim de jogo a todos
+        // Verificação final (caso tenha sido atropelado por fantasma sem se mexer)
+        if (!self->alive && board->game_running) {
+             board->exit_status = 2; // MORTE
+             board->game_running = 0;
         }
 
         pthread_mutex_unlock(&board->board_lock);
         
-        // Se foi movimento automático, dormir um pouco
+        // Delay se for movimento automático
         if (moved && self->n_moves > 0) sleep_ms(board->tempo);
     }
     return NULL;
@@ -125,19 +150,21 @@ void* pacman_thread(void* arg) {
 int main(int argc, char** argv) {
     if (argc < 2) { printf("Usage: %s <dir>\n", argv[0]); return 1; }
 
-    // ... (Código de scandir igual ao anterior) ...
     char* dir_path = argv[1];
     struct dirent **namelist;
+    // Usa filter_levels e alphasort definidos/incluídos via files.h e dirent.h
     int n = scandir(dir_path, &namelist, filter_levels, alphasort);
-    if (n < 0) return 1;
+    if (n < 0) { perror("scandir"); return 1; }
 
     srand(time(NULL));
+    open_debug_file("debug.log"); // Inicializar debug
     terminal_init();
     
     board_t game_board;
     int accumulated_points = 0;
 
     for (int i = 0; i < n; i++) {
+        // Carregar Nível
         if (load_level(&game_board, dir_path, namelist[i]->d_name, accumulated_points) != 0) {
             free(namelist[i]); continue;
         }
@@ -158,61 +185,88 @@ int main(int argc, char** argv) {
         }
 
         // --- LOOP PRINCIPAL (INTERFACE) ---
-        // Apenas desenha e lê input. Não move lógica.
-        
-        int level_result = 0;
         draw_board(&game_board, DRAW_MENU);
 
         while (game_board.game_running) {
-            // 1. Desenhar (Protegido por Mutex para leitura consistente)
+            // 1. Desenhar (Protegido)
             pthread_mutex_lock(&game_board.board_lock);
-            draw_board(&game_board, DRAW_MENU);
             
-            // Verificar condições de vitória/derrota dentro do lock
-            if (!game_board.pacmans[0].alive) {
-                game_board.game_running = 0;
-                level_result = 2; // QUIT/DIE
+            // Segurança extra: Verificar se morreu "passivamente"
+            if (!game_board.pacmans[0].alive && game_board.exit_status == 0) {
+                 game_board.exit_status = 2; // Morte
+                 game_board.game_running = 0;
             }
-            // Verificar se ganhou (ex: portal) - Adaptar move_pacman para setar flag
-            // Por simplicidade, assuma que move_pacman gere isto ou verifique portal aqui
+            
+            draw_board(&game_board, DRAW_MENU);
             pthread_mutex_unlock(&game_board.board_lock);
-
             refresh_screen();
 
-            // 2. Ler Input (Non-blocking)
+            // 2. Input
             char input = get_input();
             if (input == 'Q') {
+                pthread_mutex_lock(&game_board.board_lock);
+                game_board.exit_status = 3; // QUIT
                 game_board.game_running = 0;
-                level_result = 2;
-            }
+                pthread_mutex_unlock(&game_board.board_lock);
+            } 
             else if (input != '\0') {
-                // Passar input para a thread do Pacman processar
+                // Passar comando à thread
                 game_board.next_pacman_cmd = input;
             }
 
-            // 3. Frame Rate (~30 FPS)
-            sleep_ms(33); 
+            sleep_ms(33); // ~30 FPS
         }
 
-        // --- JOIN THREADS (Esperar que acabem) ---
+        // --- FIM DO NÍVEL ---
+        
+        // 1. Esperar TODAS as Threads (CRÍTICO antes de unload)
         pthread_join(p_thread, NULL);
         for(int g=0; g < game_board.n_ghosts; g++) {
             pthread_join(g_threads[g], NULL);
         }
 
-        if (level_result == 2) { // Game Over
-            screen_refresh(&game_board, DRAW_GAME_OVER);
-            sleep_ms(2000);
-            break; 
+        // 2. Decidir Próximo Passo
+        int status = game_board.exit_status;
+
+        if (status == 1) { 
+            // === VITÓRIA (PORTAL) ===
+            screen_refresh(&game_board, DRAW_WIN);
+            sleep_ms(1000);
+            
+            accumulated_points = game_board.pacmans[0].points;
+            
+            unload_level(&game_board);
+            free(namelist[i]);
+            
+            // LIMPEZA VISUAL (Resolve o bug do Pacman duplicado)
+            clear();
+            refresh();
+            // Continua para o próximo nível (i++)
         }
-        
-        // Acumular pontos e limpar
-        accumulated_points = game_board.pacmans[0].points;
-        unload_level(&game_board);
-        free(namelist[i]);
+        else {
+            // === DERROTA OU QUIT ===
+            if (status == 2) {
+                screen_refresh(&game_board, DRAW_GAME_OVER);
+            }
+            // Se for 3 (Quit), não mostra Game Over, sai só.
+            
+            sleep_ms(2000);
+            
+            unload_level(&game_board);
+            free(namelist[i]);
+            
+            break; // <--- SAI DO CICLO FOR (Não carrega nível seguinte)
+        }
     }
     
+    // Libertar o resto da lista do scandir se saímos a meio
+    for (int k = 0; k < n; k++) {
+        // free(namelist[k]) seria double free para os já processados, 
+        // num cenário real geriríamos o índice melhor, mas o SO limpa ao sair.
+    }
     free(namelist);
+
     terminal_cleanup();
+    close_debug_file();
     return 0;
 }

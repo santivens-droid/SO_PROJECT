@@ -69,6 +69,8 @@ typedef struct {
     int game_running;           // Flag: 1 = Jogo corre, 0 = Jogo deve parar
     char next_pacman_cmd;       // Comunicação entre Main (Teclado) e Thread Pacman
     // ------------------------
+
+    int exit_status;
 } board_t;
 
 /*Makes the current thread sleep for 'int milliseconds' miliseconds*/

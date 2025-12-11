@@ -270,6 +270,7 @@ int load_level(board_t* board, const char* dir_path, const char* level_file, int
     
     board->game_running = 1;      // Marcar jogo como ativo
     board->next_pacman_cmd = '\0'; // Limpar comando
+    board->exit_status = 0;
 
     return 0;
 }
