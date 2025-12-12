@@ -1,7 +1,6 @@
-PASSO 0
+PASSO 1
 POS 1 1
 S
-S
-S
-S
-Q
+W
+
+

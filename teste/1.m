@@ -1,4 +1,4 @@
 PASSO 1
-POS 4 2
+POS 1 2
 S
 W

@@ -209,20 +209,27 @@ int main(int argc, char** argv) {
         // --- LOOP PRINCIPAL (UI & INPUT) ---
         while (game_board.game_running) {
             
-            // 1. Desenhar (Usando helper para bloquear estado)
+            // 1. Desenhar
             screen_refresh(&game_board, DRAW_MENU);
 
-            // 2. Input
+            // 2. Ler Input
             char input = get_input();
+            
+            // 3. Verificar Modo Automático
+            // Se n_moves > 0, estamos a ler ficheiro -> IGNORAR TECLADO
+            int is_auto_mode = (game_board.pacmans[0].n_moves > 0);
 
             // =======================================================
-            // LÓGICA DE SAVE (G) - TECLADO OU FICHEIRO
+            // LÓGICA DE SAVE (G) - FICHEIRO OU TECLADO (Condicional)
             // =======================================================
-            if ((input == 'G' || game_board.save_request) && has_active_save == 0) {
+            // O Save acontece se:
+            // a) A thread pediu via ficheiro (save_request)
+            // b) O utilizador clicou 'G' E NÃO estamos em modo automático
+            if ((game_board.save_request || (!is_auto_mode && input == 'G')) && has_active_save == 0) {
                 
                 game_board.save_request = 0; // Limpar bandeira
 
-                // 1. BLOQUEAR O PAI (STOP THE WORLD)
+                // BLOQUEAR O PAI
                 lock_all_rows(&game_board);
                 
                 pid_t pid = fork();
@@ -231,49 +238,30 @@ int main(int argc, char** argv) {
                     perror("Erro fork");
                     unlock_all_rows(&game_board);
                 }
-                else if (pid > 0) {
-                    // === PROCESSO PAI (Wait & Freeze) ===
-                    
+                else if (pid > 0) { // PAI
                     int status;
                     waitpid(pid, &status, 0); 
 
-                    // O Filho terminou. O Pai acorda.
-                    
                     if (WIFEXITED(status)) {
                         int exit_code = WEXITSTATUS(status);
-                        
                         if (exit_code == EXIT_RESTORE) {
-                            // Restaurar
                             has_active_save = 0;
                             clear(); refresh();
-
-                            // Soltamos as threads do Pai para continuarem do ponto 'G'
                             unlock_all_rows(&game_board);
-                            
-                            continue; // Volta ao início do loop
+                            continue; 
                         }
                         else if (exit_code == EXIT_GAME_OVER) {
-                            // Quit no filho
                             game_board.exit_status = 3;
                             game_board.game_running = 0;
                         }
                     }
-                    // Libertar o lock se não for restore
                     unlock_all_rows(&game_board);
                 }
-                else {
-                    // === PROCESSO FILHO (Jogo Ativo) ===
-                    
-                    // O filho herda o mutex TRANCADO. Destrancar IMEDIATAMENTE.
+                else { // FILHO
                     unlock_all_rows(&game_board);
-                    
                     has_active_save = 1;
-
-                    // Reiniciar ncurses para o filho (CRÍTICO)
-                    nodelay(stdscr, TRUE);
-                    keypad(stdscr, TRUE);
+                    nodelay(stdscr, TRUE); keypad(stdscr, TRUE);
                     
-                    // Recriar as threads no filho (apenas a main sobreviveu ao fork)
                     pthread_create(&p_thread, NULL, pacman_thread, &game_board);
                     for(int g=0; g < game_board.n_ghosts; g++) {
                         thread_arg_t* args = malloc(sizeof(thread_arg_t));
@@ -284,9 +272,9 @@ int main(int argc, char** argv) {
                 }
             }
             // =======================================================
-            // LÓGICA DE QUIT (Q)
+            // LÓGICA DE QUIT (Q) - APENAS MODO MANUAL
             // =======================================================
-            else if (input == 'Q') {
+            else if (!is_auto_mode && input == 'Q') {
                 lock_all_rows(&game_board);
                 game_board.exit_status = 3; 
                 game_board.game_running = 0;
@@ -295,13 +283,13 @@ int main(int argc, char** argv) {
                 if (has_active_save) exit(EXIT_GAME_OVER);
             } 
             // =======================================================
-            // INPUT DE MOVIMENTO (WASD)
+            // INPUT DE MOVIMENTO - APENAS MODO MANUAL
             // =======================================================
-            else if (input != '\0') {
+            else if (!is_auto_mode && input != '\0') {
                 game_board.next_pacman_cmd = input;
             }
 
-            sleep_ms(33); // ~30 FPS UI Update
+            sleep_ms(33); 
         }
 
         // --- FIM DO NÍVEL / JOGO ---
