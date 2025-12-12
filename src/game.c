@@ -238,23 +238,53 @@ int main(int argc, char** argv) {
                     perror("Erro fork");
                     unlock_all_rows(&game_board);
                 }
-                else if (pid > 0) { // PAI
+                else if (pid > 0) {
+                    // === PROCESSO PAI (Wait & Freeze) ===
+                    
                     int status;
                     waitpid(pid, &status, 0); 
 
+                    // O Filho terminou. O Pai acorda.
+                    
                     if (WIFEXITED(status)) {
                         int exit_code = WEXITSTATUS(status);
+                        
                         if (exit_code == EXIT_RESTORE) {
+                            // CASO 1: O Filho morreu e pediu RESTORE.
+                            // O Pai deve continuar a jogar a partir daqui.
                             has_active_save = 0;
-                            clear(); refresh();
+                            
+                            // Forçar redesenho imediato para limpar lixo visual do filho
+                            clear(); 
+                            refresh();
+                            screen_refresh(&game_board, DRAW_MENU);
+
                             unlock_all_rows(&game_board);
-                            continue; 
+                            continue; // Volta ao início do loop (Renasce no G)
                         }
-                        else if (exit_code == EXIT_GAME_OVER) {
-                            game_board.exit_status = 3;
+                        else {
+                            // CASO 2: O Filho acabou o jogo (Vitória ou Quit).
+                            // Se o código não é RESTORE, o Pai também deve terminar.
+                            // Isto impede que o Pai acorde quando o Filho ganha.
+                            
                             game_board.game_running = 0;
+                            
+                            // Se foi Game Over explícito, propagamos o status
+                            if (exit_code == EXIT_GAME_OVER) {
+                                game_board.exit_status = 3;
+                            } else {
+                                // Se foi 0 (Vitória do filho), saímos silenciosamente 
+                                // (o filho já mostrou as mensagens de vitória)
+                                game_board.exit_status = 3; 
+                            }
                         }
                     }
+                    else {
+                        // Se o filho crashou ou foi morto, o Pai termina por segurança
+                        game_board.game_running = 0;
+                        game_board.exit_status = 3;
+                    }
+                    
                     unlock_all_rows(&game_board);
                 }
                 else { // FILHO
